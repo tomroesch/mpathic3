@@ -1,5 +1,7 @@
 import numpy as np
-
+import pandas as pd
+import scipy as sp
+from scipy.sparse import csr, csr_matrix, lil_matrix
 
 def collapse_further(df):
     '''take clipped df and then collapse it further'''
@@ -53,7 +55,7 @@ def seqs2array_for_matmodel(seq_list):
     return mat
 
 
-def dataset2mutarray(dataset_df, modeltype, chunksize=1000, rowsforwtcalc=100):
+def dataset2mutarray(dataset_df, chunksize=1000, rowsforwtcalc=100):
 
     # Determine seqtype, etc.
     seqcol = 'seq'
@@ -61,14 +63,15 @@ def dataset2mutarray(dataset_df, modeltype, chunksize=1000, rowsforwtcalc=100):
     # Compute the wt sequence
     rowsforwtcalc = min(rowsforwtcalc, dataset_df.shape[0])
     dataset_head_df = dataset_df.head(rowsforwtcalc)
-    mut_df = profile_mut(dataset_head_df)
+    count_df = profile_ct(dataset_head_df)
+    mut_df = profile_mut(count_df)
     wtseq = ''.join(list(mut_df['wt']))
     wtrow = seqs2array_for_matmodel([wtseq]).ravel().astype(bool)
     numfeatures = len(wtrow)
 
     # Process dataframe in chunks
     startrow = 0
-    endrow = startrow+chunksize-1
+    endrow = startrow + chunksize - 1
     numrows = dataset_df.shape[0]
 
     # Fill in mutarray (a lil matrix) chunk by chunk
@@ -110,7 +113,7 @@ def profile_mut(counts_df, err=False):
 
     # Record positions in new dataframe
     mut_df = counts_df[['pos']].copy()
-    ct_cols = ["ct", "ct_0", "ct_1"]
+    ct_cols = ["ct_A", "ct_C", "ct_G", "ct_T"]
 
     # Compute mutation rate across counts
     max_ct = counts_df[ct_cols].max(axis=1)
@@ -176,6 +179,33 @@ def profile_ct(dataset_df, bin=None, start=0, end=None):
     temp_df = pd.DataFrame(counts_array,columns=counts_cols)
     counts_df = pd.concat([poss,temp_df],axis=1)
 
-    # Validate as counts dataframe
-    counts_df = qc.validate_profile_ct(counts_df,fix=True)
     return counts_df
+
+
+def fix_matrix_gauge(emat):
+    """Fix gauge of an energy matrix such that the minimum value
+    of each column is zero (columns correspond to positions), and
+    overall matrix norm is equal to 1."""
+    # fix mean
+    for j in range(emat.shape[1]):
+        emat[:,j] = emat[:,j] - sp.mean(emat[:,j])
+    # fix sum of variances equal to length of matrix
+    svar = np.sum(np.var(emat,axis=0))
+    emat = sp.sqrt(emat.shape[1])*emat/sp.sqrt(svar)
+    return emat
+
+def fix_matrix_gauge_df(df, inv_dict):
+    labels = ['val_' + str(inv_dict[i]) for i in range(len(inv_dict))]
+    #fix max and then subtract and negate (to give energy matrix representation)
+    df_max = df[labels].max(axis=1)
+    df[labels] = -1*df[labels].subtract(df_max,axis='index')
+    #fix sum of variances
+    product = np.sqrt(np.sum(np.sum(df[labels]*df[labels])))
+    df[labels] = df[labels]/product
+    return df
+
+
+def RandEmat(L,Ldict):
+    '''Makes 4xL random emat'''
+    emat_0 = fix_matrix_gauge(sp.randn(Ldict,L))
+    return emat_0
